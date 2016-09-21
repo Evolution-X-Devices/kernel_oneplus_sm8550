@@ -746,8 +746,6 @@ void dpm_resume_noirq(pm_message_t state)
 
 	resume_device_irqs();
 	device_wakeup_disarm_wake_irqs();
-
-	cpuidle_resume();
 }
 
 /**
@@ -1343,8 +1341,6 @@ static int dpm_noirq_suspend_devices(pm_message_t state)
 int dpm_suspend_noirq(pm_message_t state)
 {
 	int ret;
-
-	cpuidle_pause();
 
 	device_wakeup_arm_wake_irqs();
 	suspend_device_irqs();
