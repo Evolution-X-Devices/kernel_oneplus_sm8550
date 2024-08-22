@@ -117,6 +117,7 @@ EXPORT_SYMBOL_GPL(ehci_cf_port_reset_rwsem);
 #define HUB_DEBOUNCE_STEP	  25
 #define HUB_DEBOUNCE_STABLE	 100
 
+static void hub_release(struct kref *kref);
 static int usb_reset_and_verify_device(struct usb_device *udev);
 static int hub_port_disable(struct usb_hub *hub, int port1, int set_state);
 static bool hub_port_warm_reset_required(struct usb_hub *hub, int port1,
@@ -678,14 +679,14 @@ static void kick_hub_wq(struct usb_hub *hub)
 	 */
 	intf = to_usb_interface(hub->intfdev);
 	usb_autopm_get_interface_no_resume(intf);
-	hub_get(hub);
+	kref_get(&hub->kref);
 
 	if (queue_work(hub_wq, &hub->events))
 		return;
 
 	/* the work has already been scheduled */
 	usb_autopm_put_interface_async(intf);
-	hub_put(hub);
+	kref_put(&hub->kref, hub_release);
 }
 
 void usb_kick_hub_wq(struct usb_device *hdev)
@@ -1053,7 +1054,7 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 			goto init2;
 		goto init3;
 	}
-	hub_get(hub);
+	kref_get(&hub->kref);
 
 	/* The superspeed hub except for root hub has to use Hub Depth
 	 * value as an offset into the route string to locate the bits
@@ -1301,7 +1302,7 @@ static void hub_activate(struct usb_hub *hub, enum hub_activation_type type)
 		device_unlock(&hdev->dev);
 	}
 
-	hub_put(hub);
+	kref_put(&hub->kref, hub_release);
 }
 
 /* Implement the continuations for the delays above */
@@ -1717,16 +1718,6 @@ static void hub_release(struct kref *kref)
 	kfree(hub);
 }
 
-void hub_get(struct usb_hub *hub)
-{
-	kref_get(&hub->kref);
-}
-
-void hub_put(struct usb_hub *hub)
-{
-	kref_put(&hub->kref, hub_release);
-}
-
 static unsigned highspeed_hubs;
 
 static void hub_disconnect(struct usb_interface *intf)
@@ -1773,7 +1764,7 @@ static void hub_disconnect(struct usb_interface *intf)
 	if (hub->quirk_disable_autosuspend)
 		usb_autopm_put_interface(intf);
 
-	hub_put(hub);
+	kref_put(&hub->kref, hub_release);
 }
 
 static bool hub_descriptor_is_sane(struct usb_host_interface *desc)
@@ -5924,7 +5915,7 @@ out_hdev_lock:
 
 	/* Balance the stuff in kick_hub_wq() and allow autosuspend */
 	usb_autopm_put_interface(intf);
-	hub_put(hub);
+	kref_put(&hub->kref, hub_release);
 
 	kcov_remote_stop();
 }

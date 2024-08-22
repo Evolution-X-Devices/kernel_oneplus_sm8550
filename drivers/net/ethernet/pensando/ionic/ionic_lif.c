@@ -3232,12 +3232,9 @@ static int ionic_lif_adminq_init(struct ionic_lif *lif)
 
 	napi_enable(&qcq->napi);
 
-	if (qcq->flags & IONIC_QCQ_F_INTR) {
-		irq_set_affinity_hint(qcq->intr.vector,
-				      &qcq->intr.affinity_mask);
+	if (qcq->flags & IONIC_QCQ_F_INTR)
 		ionic_intr_mask(idev->intr_ctrl, qcq->intr.index,
 				IONIC_INTR_MASK_CLEAR);
-	}
 
 	qcq->flags |= IONIC_QCQ_F_INITED;
 

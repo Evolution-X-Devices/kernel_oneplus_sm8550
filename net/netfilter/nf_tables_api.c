@@ -1139,24 +1139,6 @@ static void nf_tables_table_disable(struct net *net, struct nft_table *table)
 #define __NFT_TABLE_F_UPDATE		(__NFT_TABLE_F_WAS_DORMANT | \
 					 __NFT_TABLE_F_WAS_AWAKEN)
 
-static bool nft_table_pending_update(const struct nft_ctx *ctx)
-{
-	struct nftables_pernet *nft_net = nft_pernet(ctx->net);
-	struct nft_trans *trans;
-
-	if (ctx->table->flags & __NFT_TABLE_F_UPDATE)
-		return true;
-
-	list_for_each_entry(trans, &nft_net->commit_list, list) {
-		if (trans->ctx.table == ctx->table &&
-		    trans->msg_type == NFT_MSG_DELCHAIN &&
-		    nft_is_base_chain(trans->ctx.chain))
-			return true;
-	}
-
-	return false;
-}
-
 static int nf_tables_updtable(struct nft_ctx *ctx)
 {
 	struct nft_trans *trans;
@@ -1170,7 +1152,7 @@ static int nf_tables_updtable(struct nft_ctx *ctx)
 	if (flags & ~NFT_TABLE_F_MASK)
 		return -EOPNOTSUPP;
 
-	if (flags == (ctx->table->flags & NFT_TABLE_F_MASK))
+	if (flags == ctx->table->flags)
 		return 0;
 
 	if ((nft_table_has_owner(ctx->table) &&
@@ -1180,7 +1162,7 @@ static int nf_tables_updtable(struct nft_ctx *ctx)
 		return -EOPNOTSUPP;
 
 	/* No dormant off/on/off/on games in single transaction */
-	if (nft_table_pending_update(ctx))
+	if (ctx->table->flags & __NFT_TABLE_F_UPDATE)
 		return -EINVAL;
 
 	trans = nft_trans_alloc(ctx, NFT_MSG_NEWTABLE,
@@ -1211,7 +1193,6 @@ static int nf_tables_updtable(struct nft_ctx *ctx)
 	return 0;
 
 err_register_hooks:
-	ctx->table->flags |= NFT_TABLE_F_DORMANT;
 	nft_trans_destroy(trans);
 	return ret;
 }
@@ -2320,9 +2301,6 @@ static int nf_tables_addchain(struct nft_ctx *ctx, u8 family, u8 genmask,
 	if (nla[NFTA_CHAIN_HOOK]) {
 		struct nft_stats __percpu *stats = NULL;
 		struct nft_chain_hook hook;
-
-		if (table->flags & __NFT_TABLE_F_UPDATE)
-			return -EINVAL;
 
 		if (flags & NFT_CHAIN_BINDING)
 			return -EOPNOTSUPP;
@@ -3487,8 +3465,6 @@ static int nft_table_validate(struct net *net, const struct nft_table *table)
 		err = nft_chain_validate(&ctx, chain);
 		if (err < 0)
 			return err;
-
-		cond_resched();
 	}
 
 	return 0;
@@ -4661,12 +4637,6 @@ static int nf_tables_newset(struct sk_buff *skb, const struct nfnl_info *info,
 			return -EOPNOTSUPP;
 		if ((flags & (NFT_SET_EVAL | NFT_SET_OBJECT)) ==
 			     (NFT_SET_EVAL | NFT_SET_OBJECT))
-			return -EOPNOTSUPP;
-		if ((flags & (NFT_SET_ANONYMOUS | NFT_SET_TIMEOUT | NFT_SET_EVAL)) ==
-			     (NFT_SET_ANONYMOUS | NFT_SET_TIMEOUT))
-			return -EOPNOTSUPP;
-		if ((flags & (NFT_SET_CONSTANT | NFT_SET_TIMEOUT)) ==
-			     (NFT_SET_CONSTANT | NFT_SET_TIMEOUT))
 			return -EOPNOTSUPP;
 	}
 
@@ -7711,12 +7681,11 @@ static int nft_flowtable_parse_hook(const struct nft_ctx *ctx,
 	return err;
 }
 
-/* call under rcu_read_lock */
 static const struct nf_flowtable_type *__nft_flowtable_type_get(u8 family)
 {
 	const struct nf_flowtable_type *type;
 
-	list_for_each_entry_rcu(type, &nf_tables_flowtables, list) {
+	list_for_each_entry(type, &nf_tables_flowtables, list) {
 		if (family == type->family)
 			return type;
 	}
@@ -7728,13 +7697,9 @@ nft_flowtable_type_get(struct net *net, u8 family)
 {
 	const struct nf_flowtable_type *type;
 
-	rcu_read_lock();
 	type = __nft_flowtable_type_get(family);
-	if (type != NULL && try_module_get(type->owner)) {
-		rcu_read_unlock();
+	if (type != NULL && try_module_get(type->owner))
 		return type;
-	}
-	rcu_read_unlock();
 
 	lockdep_nfnl_nft_mutex_not_held();
 #ifdef CONFIG_MODULES
@@ -10814,7 +10779,6 @@ static void __exit nf_tables_module_exit(void)
 	unregister_netdevice_notifier(&nf_tables_flowtable_notifier);
 	nft_chain_filter_fini();
 	nft_chain_route_fini();
-	nf_tables_trans_destroy_flush_work();
 	unregister_pernet_subsys(&nf_tables_net_ops);
 	cancel_work_sync(&trans_gc_work);
 	cancel_work_sync(&trans_destroy_work);

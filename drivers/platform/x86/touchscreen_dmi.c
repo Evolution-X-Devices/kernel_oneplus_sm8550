@@ -50,7 +50,7 @@ static const struct property_entry chuwi_hi8_air_props[] = {
 };
 
 static const struct ts_dmi_data chuwi_hi8_air_data = {
-	.acpi_name	= "MSSL1680",
+	.acpi_name	= "MSSL1680:00",
 	.properties	= chuwi_hi8_air_props,
 };
 
@@ -1154,15 +1154,6 @@ const struct dmi_system_id touchscreen_dmi_table[] = {
 		},
 	},
 	{
-		/* Chuwi Vi8 dual-boot (CWI506) */
-		.driver_data = (void *)&chuwi_vi8_data,
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Insyde"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "i86"),
-			DMI_MATCH(DMI_BIOS_VERSION, "CHUWI2.D86JHBNR02"),
-		},
-	},
-	{
 		/* Chuwi Vi8 Plus (CWI519) */
 		.driver_data = (void *)&chuwi_vi8_plus_data,
 		.matches = {
@@ -1754,7 +1745,7 @@ static void ts_dmi_add_props(struct i2c_client *client)
 	int error;
 
 	if (has_acpi_companion(dev) &&
-	    strstarts(client->name, ts_data->acpi_name)) {
+	    !strncmp(ts_data->acpi_name, client->name, I2C_NAME_SIZE)) {
 		error = device_create_managed_software_node(dev, ts_data->properties, NULL);
 		if (error)
 			dev_err(dev, "failed to add properties: %d\n", error);
