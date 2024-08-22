@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
  */
-
-#define pr_fmt(fmt) __FILE__ ": " fmt
 
 #include <linux/module.h>
 #include <linux/habmm.h>
 #include <linux/qcom_scm.h>
-#include <linux/spinlock.h>
 #include <soc/qcom/qseecom_scm.h>
 
 #include "qcom_scm.h"
@@ -25,8 +22,7 @@ struct smc_params_s {
 	uint64_t args[MAX_SCM_ARGS];
 } __packed;
 
-static u32 nonatomic_handle;
-static u32 atomic_handle;
+static u32 handle;
 static bool opened;
 
 int scm_qcpe_hab_open(void)
@@ -34,19 +30,12 @@ int scm_qcpe_hab_open(void)
 	int ret;
 
 	if (!opened) {
-		ret = habmm_socket_open(&nonatomic_handle, MM_QCPE_VM1, 0, 0);
+		ret = habmm_socket_open(&handle, MM_QCPE_VM1, 0, 0);
 		if (ret) {
-			pr_err("habmm_socket_open failed for nonatomic with ret = %d\n", ret);
-			return ret;
-		}
-		ret = habmm_socket_open(&atomic_handle, MM_QCPE_VM1, 0, 0);
-		if (ret) {
-			pr_err("habmm_socket_open failed for atomic with ret = %d\n", ret);
-			habmm_socket_close(nonatomic_handle);
+			pr_err("habmm_socket_open failed with ret = %d\n", ret);
 			return ret;
 		}
 		opened = true;
-		pr_info("HAB channel established\n");
 	}
 
 	return 0;
@@ -56,10 +45,9 @@ EXPORT_SYMBOL(scm_qcpe_hab_open);
 void scm_qcpe_hab_close(void)
 {
 	if (opened) {
-		habmm_socket_close(nonatomic_handle);
-		habmm_socket_close(atomic_handle);
+		habmm_socket_close(handle);
 		opened = false;
-		nonatomic_handle = atomic_handle = 0;
+		handle = 0;
 	}
 }
 EXPORT_SYMBOL(scm_qcpe_hab_close);
@@ -72,11 +60,10 @@ static int scm_qcpe_hab_send_receive(struct smc_params_s *smc_params,
 		u32 *size_bytes)
 {
 	int ret;
-	uint64_t fn = smc_params->fn_id;
 
-	ret = habmm_socket_send(nonatomic_handle, smc_params, sizeof(*smc_params), 0);
+	ret = habmm_socket_send(handle, smc_params, sizeof(*smc_params), 0);
 	if (ret) {
-		pr_err("HAB send failed for 0x%lx, nonatomic, ret= 0x%x\n", fn, ret);
+		pr_err("habmm_socket_send failed, ret= 0x%x\n", ret);
 		return ret;
 	}
 
@@ -84,13 +71,12 @@ static int scm_qcpe_hab_send_receive(struct smc_params_s *smc_params,
 
 	do {
 		*size_bytes = sizeof(*smc_params);
-		ret = habmm_socket_recv(nonatomic_handle, smc_params, size_bytes, 0,
+		ret = habmm_socket_recv(handle, smc_params, size_bytes, 0,
 					HABMM_SOCKET_RECV_FLAGS_UNINTERRUPTIBLE);
 	} while (-EAGAIN == ret);
 
 	if (ret) {
-		pr_err("HAB recv failed for 0x%lx, nonatomic, ret= 0x%x\n",
-				fn, ret);
+		pr_err("habmm_socket_recv failed, ret= 0x%x\n", ret);
 		return ret;
 	}
 
@@ -104,33 +90,34 @@ static int scm_qcpe_hab_send_receive(struct smc_params_s *smc_params,
 static int scm_qcpe_hab_send_receive_atomic(struct smc_params_s *smc_params,
 		u32 *size_bytes)
 {
-	static DEFINE_SPINLOCK(qcom_scm_hab_atomic_lock);
 	int ret;
-	int fn = smc_params->fn_id;
+	unsigned long delay;
 
-	spin_lock_bh(&qcom_scm_hab_atomic_lock);
+	delay = jiffies + msecs_to_jiffies(1000); /* 1 second delay for send */
 
 	do {
-		ret = habmm_socket_send(atomic_handle, smc_params, sizeof(*smc_params),
+		ret = habmm_socket_send(handle, smc_params, sizeof(*smc_params),
 					HABMM_SOCKET_SEND_FLAGS_NON_BLOCKING);
-	} while (-EAGAIN == ret);
+	} while ((-EAGAIN == ret) && time_before(jiffies, delay));
 
 	if (ret) {
-		pr_err("HAB send failed for 0x%lx, atomic, ret= 0x%x\n", fn, ret);
-		spin_unlock_bh(&qcom_scm_hab_atomic_lock);
+		pr_err("HAB send failed, non-blocking, ret= 0x%x\n", ret);
 		return ret;
 	}
+
 	memset(smc_params, 0x0, sizeof(*smc_params));
+
+	delay = jiffies + msecs_to_jiffies(1000); /* 1 second delay for receive */
+
 	do {
 		*size_bytes = sizeof(*smc_params);
-		ret = habmm_socket_recv(atomic_handle, smc_params, size_bytes, 0,
+		ret = habmm_socket_recv(handle, smc_params, size_bytes, 0,
 					HABMM_SOCKET_RECV_FLAGS_NON_BLOCKING);
-	} while ((-EAGAIN == ret) && (*size_bytes == 0));
+	} while ((-EAGAIN == ret) && time_before(jiffies, delay) &&
+			(*size_bytes == 0));
 
-	spin_unlock_bh(&qcom_scm_hab_atomic_lock);
 	if (ret) {
-		pr_err("HAB recv failed for syscall 0x%lx, atomic, ret= 0x%x\n",
-			fn, ret);
+		pr_err("HAB recv failed, non-blocking, ret= 0x%x\n", ret);
 		return ret;
 	}
 

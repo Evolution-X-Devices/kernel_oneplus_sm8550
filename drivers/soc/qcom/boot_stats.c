@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2019, 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kernel.h>
@@ -181,9 +181,8 @@ static void _destroy_boot_marker(const char *name)
 {
 	struct boot_marker *marker;
 	struct boot_marker *temp_addr;
-	unsigned long flags;
 
-	spin_lock_irqsave(&boot_marker_list.slock, flags);
+	spin_lock(&boot_marker_list.slock);
 	list_for_each_entry_safe(marker, temp_addr, &boot_marker_list.list,
 			list) {
 		if (strnstr(marker->marker_name, name,
@@ -194,7 +193,7 @@ static void _destroy_boot_marker(const char *name)
 			kfree(marker);
 		}
 	}
-	spin_unlock_irqrestore(&boot_marker_list.slock, flags);
+	spin_unlock(&boot_marker_list.slock);
 }
 
 /*
@@ -231,7 +230,6 @@ static void _create_boot_marker(const char *name,
 {
 	struct boot_marker *new_boot_marker;
 	struct boot_marker *marker;
-	unsigned long flags;
 	unsigned int sum;
 
 	if (num_markers >= MAX_NUM_MARKERS) {
@@ -261,10 +259,10 @@ static void _create_boot_marker(const char *name,
 	new_boot_marker->timer_value = timer_value;
 	sum = calculate_marker_charsum(new_boot_marker->marker_name);
 
-	spin_lock_irqsave(&boot_marker_list.slock, flags);
+	spin_lock(&boot_marker_list.slock);
 	list_add_tail(&(new_boot_marker->list), &(boot_marker_list.list));
 	hash_add(marker_htable, &new_boot_marker->hash, sum);
-	spin_unlock_irqrestore(&boot_marker_list.slock, flags);
+	spin_unlock(&boot_marker_list.slock);
 	num_markers++;
 }
 
@@ -272,9 +270,8 @@ static void boot_marker_cleanup(void)
 {
 	struct boot_marker *marker;
 	struct boot_marker *temp_addr;
-	unsigned long flags;
 
-	spin_lock_irqsave(&boot_marker_list.slock, flags);
+	spin_lock(&boot_marker_list.slock);
 	list_for_each_entry_safe(marker, temp_addr, &boot_marker_list.list,
 			list) {
 		num_markers--;
@@ -282,7 +279,7 @@ static void boot_marker_cleanup(void)
 		list_del(&marker->list);
 		kfree(marker);
 	}
-	spin_unlock_irqrestore(&boot_marker_list.slock, flags);
+	spin_unlock(&boot_marker_list.slock);
 }
 
 void place_marker(const char *name)
@@ -343,7 +340,6 @@ static ssize_t bootkpi_reader(struct file *fp, struct kobject *obj,
 {
 	struct boot_marker *marker;
 	unsigned long long ts_whole_num, ts_precision;
-	unsigned long flags;
 	static char *kpi_buf;
 	static int temp;
 	int ret = 0;
@@ -355,7 +351,7 @@ static ssize_t bootkpi_reader(struct file *fp, struct kobject *obj,
 	}
 
 	if (!temp) {
-		spin_lock_irqsave(&boot_marker_list.slock, flags);
+		spin_lock(&boot_marker_list.slock);
 		list_for_each_entry(marker, &boot_marker_list.list, list) {
 			WARN_ON((BOOTKPI_BUF_SIZE - temp) <= 0);
 
@@ -380,7 +376,7 @@ static ssize_t bootkpi_reader(struct file *fp, struct kobject *obj,
 
 		}
 
-		spin_unlock_irqrestore(&boot_marker_list.slock, flags);
+		spin_unlock(&boot_marker_list.slock);
 	}
 
 	if (temp - off > count)

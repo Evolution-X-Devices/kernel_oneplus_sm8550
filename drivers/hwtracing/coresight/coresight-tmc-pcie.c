@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Description: CoreSight TMC PCIe driver
  */
@@ -13,8 +13,6 @@
 #include "coresight-priv.h"
 #include "coresight-common.h"
 #include "coresight-tmc.h"
-
-static struct tmc_pcie_data *tmc_pcie_data;
 
 static bool tmc_pcie_support_ipa(struct device *dev)
 {
@@ -135,20 +133,6 @@ static void tmc_pcie_write_complete_cb(void *req)
 	kfree(req);
 }
 
-static void tmc_pcie_mhi_dev_event_cb(struct mhi_dev_client_cb_reason *reason)
-{
-	struct tmc_pcie_data *pcie_data;
-
-	pcie_data = tmc_pcie_data;
-	if (!pcie_data)
-		return;
-
-	if (reason->reason == MHI_DEV_TRE_AVAILABLE) {
-		queue_work(pcie_data->pcie_wq, &pcie_data->pcie_write_work);
-		dev_dbg(pcie_data->dev, "mhi tre available\n");
-	}
-}
-
 static void tmc_pcie_open_work_fn(struct work_struct *work)
 {
 	int ret = 0;
@@ -161,12 +145,12 @@ static void tmc_pcie_open_work_fn(struct work_struct *work)
 	/* Open write channel*/
 	ret = mhi_dev_open_channel(pcie_data->pcie_out_chan,
 			&pcie_data->out_handle,
-			tmc_pcie_mhi_dev_event_cb);
+			NULL);
 	if (ret < 0) {
-		dev_err(pcie_data->dev, "%s: open pcie out channel fail %d\n",
+		dev_dbg(pcie_data->dev, "%s: open pcie out channel fail %d\n",
 						__func__, ret);
 	} else {
-		dev_info(pcie_data->dev,
+		dev_dbg(pcie_data->dev,
 				"Open pcie out channel successfully\n");
 		mutex_lock(&pcie_data->pcie_lock);
 		pcie_data->pcie_chan_opened = true;
@@ -219,6 +203,11 @@ static void tmc_pcie_write_work_fn(struct work_struct *work)
 			break;
 		}
 
+		if (pcie_data->offset + actual >= etr_buf->size)
+			pcie_data->offset = 0;
+		else
+			pcie_data->offset += actual;
+
 		req->buf = buf;
 		req->client = pcie_data->out_handle;
 		req->context = pcie_data;
@@ -237,11 +226,6 @@ static void tmc_pcie_write_work_fn(struct work_struct *work)
 			req = NULL;
 			break;
 		}
-
-		if (pcie_data->offset + actual >= etr_buf->size)
-			pcie_data->offset = 0;
-		else
-			pcie_data->offset += actual;
 
 		pcie_data->total_size += actual;
 	}
@@ -701,7 +685,6 @@ int tmc_pcie_init(struct amba_device *adev,
 		pcie_data->byte_cntr_data = byte_cntr_data;
 		drvdata->pcie_data = pcie_data;
 		byte_cntr_data->pcie_data = pcie_data;
-		tmc_pcie_data = pcie_data;
 
 		if (tmc_pcie_support_ipa(dev)) {
 			ret = tmc_pcie_hw_init(drvdata->pcie_data);

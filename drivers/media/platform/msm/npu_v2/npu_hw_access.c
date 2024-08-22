@@ -424,31 +424,49 @@ uint8_t npu_hw_log_enabled(void)
  * Functions - Subsystem/PIL
  * -------------------------------------------------------------------------
  */
+#define NPU_PAS_ID (23)
+
 int npu_subsystem_get(struct npu_device *npu_dev, const char *fw_name)
 {
-	struct npu_host_ctx *host_ctx = &npu_dev->host_ctx;
-	int ret = 0;
+	struct device *dev = npu_dev->device;
+	const struct firmware *firmware_p;
+	ssize_t fw_size;
+	/* load firmware */
+	int ret = request_firmware(&firmware_p, fw_name, dev);
 
-	host_ctx->npu_rproc_handle = rproc_get_by_phandle(npu_dev->rproc_phandle);
-	if (IS_ERR_OR_NULL(host_ctx->npu_rproc_handle)) {
-		ret = PTR_ERR(host_ctx->npu_rproc_handle);
-		NPU_ERR("get npu rproc failed: %d", ret);
+	if (ret < 0) {
+		NPU_ERR("request_firmware %s failed: %d\n", fw_name, ret);
 		return ret;
 	}
-
-	ret = rproc_boot(host_ctx->npu_rproc_handle);
+	fw_size = qcom_mdt_get_size(firmware_p);
+	if (fw_size < 0 || fw_size > npu_dev->fw_io.mem_size) {
+		NPU_ERR("npu fw size invalid, %lld, fw_io.mem_size =%d\n",
+			fw_size, npu_dev->fw_io.mem_size);
+		return -EINVAL;
+	}
+	/* load the ELF segments to memory */
+	ret = qcom_mdt_load(dev, firmware_p, fw_name, NPU_PAS_ID,
+		npu_dev->fw_io.mem_region, npu_dev->fw_io.mem_phys,
+		npu_dev->fw_io.mem_size, &npu_dev->fw_io.mem_reloc);
 	if (ret) {
-		NPU_ERR("boot npu by remoteproc failed: %d", ret);
+		NPU_ERR("qcom_mdt_load failure, %d\n", ret);
 		return ret;
 	}
 
+	ret = qcom_scm_pas_auth_and_reset(NPU_PAS_ID);
+	if (ret) {
+		NPU_ERR("failed to authenticate image and release reset, ret:%d\n", ret);
+		return -2;
+	}
+	release_firmware(firmware_p);
 	NPU_DBG("done pas auth\n");
-	return ret;
+	return 0;
 }
 
 void npu_subsystem_put(struct npu_device *npu_dev)
 {
-	struct npu_host_ctx *host_ctx = &npu_dev->host_ctx;
+	int ret = qcom_scm_pas_shutdown(NPU_PAS_ID);
 
-	rproc_shutdown(host_ctx->npu_rproc_handle);
+	if (ret)
+		pr_err("failed to shutdown: %d\n", ret);
 }
